@@ -14,6 +14,7 @@ import (
 	"github.com/distribution/distribution/v3/registry/storage/driver/factory"
 	_ "github.com/distribution/distribution/v3/registry/storage/driver/filesystem"
 	"github.com/google/uuid"
+	"golang.org/x/term"
 
 	"github.com/openshift/oc-mirror/v2/internal/pkg/additional"
 	"github.com/openshift/oc-mirror/v2/internal/pkg/api/v2alpha1"
@@ -48,6 +49,7 @@ func NewDeleteCommand(log clog.PluggableLoggerInterface) *cobra.Command {
 
 	global := &mirror.GlobalOptions{
 		SecurePolicy: false,
+		IsTerminal:   term.IsTerminal(int(os.Stdout.Fd())),
 	}
 
 	flagSharedOpts, sharedOpts := mirror.SharedImageFlags()
