@@ -190,19 +190,18 @@ func NewMirrorCmd(log clog.PluggableLoggerInterface) *cobra.Command {
 		SilenceErrors: false,
 		SilenceUsage:  false,
 		Run: func(cmd *cobra.Command, args []string) {
-
 			log.Info(emoji.WavingHandSign + " Hello, welcome to oc-mirror")
 			log.Info(emoji.Gear + "  setting up the environment for you...")
 
 			err := ex.Validate(args)
 			if err != nil {
 				log.Error("%v ", err)
-				os.Exit(1)
+				os.Exit(genericErrorCode)
 			}
 			err = ex.Complete(args)
 			if err != nil {
 				log.Error(" %v ", err)
-				os.Exit(1)
+				os.Exit(genericErrorCode)
 			}
 			defer ex.logFile.Close()
 			cmd.SetOutput(ex.logFile)
@@ -211,13 +210,16 @@ func NewMirrorCmd(log clog.PluggableLoggerInterface) *cobra.Command {
 			err = ex.setupLocalStorage()
 			if err != nil {
 				log.Error(" %v ", err)
-				os.Exit(1)
+				os.Exit(genericErrorCode)
 			}
 
 			err = ex.Run(cmd, args)
 			if err != nil {
 				log.Error("%v ", err)
-				os.Exit(1)
+				if schemaError, ok := err.(*ExecutorSchemaError); ok {
+					os.Exit(schemaError.Code())
+				}
+				os.Exit(genericErrorCode)
 			}
 		},
 	}
@@ -507,6 +509,7 @@ func (o *ExecutorSchema) Complete(args []string) error {
 func (o *ExecutorSchema) Run(cmd *cobra.Command, args []string) error {
 	var err error
 
+	defer o.closeAll()
 	switch {
 	case o.Opts.IsMirrorToDisk():
 		err = o.RunMirrorToDisk(cmd, args)
@@ -518,13 +521,7 @@ func (o *ExecutorSchema) Run(cmd *cobra.Command, args []string) error {
 
 	o.Log.Info(emoji.WavingHandSign + " Goodbye, thank you for using oc-mirror")
 
-	if err != nil {
-		o.closeAll()
-		return err
-	}
-
-	defer o.closeAll()
-	return nil
+	return err
 }
 
 // setupLocalRegistryConfig - private function to parse registry config
@@ -773,6 +770,7 @@ func (o *ExecutorSchema) RunMirrorToDisk(cmd *cobra.Command, args []string) erro
 		return err
 	}
 
+	var errorredSchema v2alpha1.CollectorSchema
 	if !o.Opts.IsDryRun {
 		err = o.RebuildCatalogs(cmd.Context(), collectorSchema)
 		if err != nil {
@@ -780,15 +778,12 @@ func (o *ExecutorSchema) RunMirrorToDisk(cmd *cobra.Command, args []string) erro
 		}
 		var copiedSchema v2alpha1.CollectorSchema
 		// call the batch worker
-		if cs, err := o.Batch.Worker(cmd.Context(), collectorSchema, *o.Opts); err != nil {
+		if copiedSchema, errorredSchema, err = o.Batch.Worker(cmd.Context(), collectorSchema, *o.Opts); err != nil {
 			if _, ok := err.(batch.UnsafeError); ok {
 				return err
 			} else {
 				batchError = err
-				copiedSchema = cs
 			}
-		} else {
-			copiedSchema = cs
 		}
 
 		// OCPBUGS-45580: add the rebuilt catalog image to the collectorSchema so that
@@ -828,7 +823,7 @@ func (o *ExecutorSchema) RunMirrorToDisk(cmd *cobra.Command, args []string) erro
 		return err
 	}
 	if batchError != nil {
-		o.Log.Warn("%v", batchError)
+		return o.executorErrorFromBatchError(batchError, &errorredSchema)
 	}
 	return nil
 }
@@ -855,22 +850,20 @@ func (o *ExecutorSchema) RunMirrorToMirror(cmd *cobra.Command, args []string) er
 			return err
 		}
 	}
+	var errorredSchema v2alpha1.CollectorSchema
 	if !o.Opts.IsDryRun {
 		err = o.RebuildCatalogs(cmd.Context(), collectorSchema)
 		if err != nil {
 			return err
 		}
+		// call the batch worker
 		var copiedSchema v2alpha1.CollectorSchema
-		//call the batch worker
-		if cs, err := o.Batch.Worker(cmd.Context(), collectorSchema, *o.Opts); err != nil {
+		if copiedSchema, errorredSchema, err = o.Batch.Worker(cmd.Context(), collectorSchema, *o.Opts); err != nil {
 			if _, ok := err.(batch.UnsafeError); ok {
 				return err
 			} else {
 				batchError = err
-				copiedSchema = cs
 			}
-		} else {
-			copiedSchema = cs
 		}
 
 		//create IDMS/ITMS
@@ -925,7 +918,7 @@ func (o *ExecutorSchema) RunMirrorToMirror(cmd *cobra.Command, args []string) er
 		return err
 	}
 	if batchError != nil {
-		o.Log.Warn("%v", batchError)
+		return o.executorErrorFromBatchError(batchError, &errorredSchema)
 	}
 	return nil
 }
@@ -960,18 +953,16 @@ func (o *ExecutorSchema) RunDiskToMirror(cmd *cobra.Command, args []string) erro
 		}
 	}
 
+	var errorredSchema v2alpha1.CollectorSchema
 	if !o.Opts.IsDryRun {
 		var copiedSchema v2alpha1.CollectorSchema
 		// call the batch worker
-		if cs, err := o.Batch.Worker(cmd.Context(), collectorSchema, *o.Opts); err != nil {
+		if copiedSchema, errorredSchema, err = o.Batch.Worker(cmd.Context(), collectorSchema, *o.Opts); err != nil {
 			if _, ok := err.(batch.UnsafeError); ok {
 				return err
 			} else {
 				batchError = err
-				copiedSchema = cs
 			}
-		} else {
-			copiedSchema = cs
 		}
 
 		// create IDMS/ITMS
@@ -1028,7 +1019,7 @@ func (o *ExecutorSchema) RunDiskToMirror(cmd *cobra.Command, args []string) erro
 		return err
 	}
 	if batchError != nil {
-		o.Log.Warn("%v", batchError)
+		return o.executorErrorFromBatchError(batchError, &errorredSchema)
 	}
 	return nil
 }
@@ -1274,4 +1265,25 @@ func addRebuiltCatalogs(cs v2alpha1.CollectorSchema) (v2alpha1.CollectorSchema, 
 		}
 	}
 	return cs, nil
+}
+
+func (o *ExecutorSchema) executorErrorFromBatchError(batchError error, errorredSchema *v2alpha1.CollectorSchema) *ExecutorSchemaError {
+	retCode := 0
+	if errorredSchema.TotalReleaseImages > 0 {
+		retCode += releaseImageErrorCode
+	}
+	if errorredSchema.TotalOperatorImages > 0 {
+		retCode += operatorErrorCode
+	}
+	if errorredSchema.TotalHelmImages > 0 {
+		retCode += helmImageErrorCode
+	}
+	if errorredSchema.TotalAdditionalImages > 0 {
+		retCode += additionalImageErrorCode
+	}
+	if retCode > 0 {
+		return &ExecutorSchemaError{batchError, retCode}
+	}
+	o.Log.Warn("%v", batchError)
+	return nil
 }
