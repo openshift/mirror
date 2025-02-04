@@ -37,8 +37,7 @@ type BatchSchema struct {
 }
 
 // Worker - the main batch processor
-func (o *ConcurrentBatch) Worker(ctx context.Context, collectorSchema v2alpha1.CollectorSchema, opts mirror.CopyOptions) (v2alpha1.CollectorSchema, error) {
-
+func (o *ConcurrentBatch) Worker(ctx context.Context, collectorSchema v2alpha1.CollectorSchema, opts mirror.CopyOptions) (v2alpha1.CollectorSchema, v2alpha1.CollectorSchema, error) {
 	var errArray []mirrorErrorSchema
 	var mu sync.Mutex
 	var wg errgroup.Group
@@ -153,7 +152,7 @@ func (o *ConcurrentBatch) Worker(ctx context.Context, collectorSchema v2alpha1.C
 
 		}
 		if err := wg.Wait(); err != nil {
-			return o.CopiedImages, err
+			return o.CopiedImages, v2alpha1.CollectorSchema{}, err
 		}
 		p.Wait()
 		if batchIndex < len(batches)-1 { // for all batches except last one
@@ -208,7 +207,7 @@ func (o *ConcurrentBatch) Worker(ctx context.Context, collectorSchema v2alpha1.C
 	if len(errArray) > 0 {
 		filename, err := saveErrors(o.Log, o.LogsDir, errArray)
 		if err != nil {
-			return o.CopiedImages, NewSafeError(workerPrefix+"some errors occurred during the mirroring - unable to log these errors in %s: %v", o.LogsDir+"/"+filename, err)
+			return o.CopiedImages, v2alpha1.CollectorSchema{}, NewSafeError(workerPrefix+"some errors occurred during the mirroring - unable to log these errors in %s: %v", o.LogsDir+"/"+filename, err)
 		} else {
 			msg := workerPrefix + "some errors occurred during the mirroring.\n" +
 				"\t Please review " + o.LogsDir + "/" + filename + " for a list of mirroring errors.\n" +
@@ -216,13 +215,13 @@ func (o *ConcurrentBatch) Worker(ctx context.Context, collectorSchema v2alpha1.C
 				"\t * removing images or operators that cause the error from the image set config, and retrying\n" +
 				"\t * keeping the image set config (images are mandatory for you), and retrying\n" +
 				"\t * mirroring the failing images manually, if retries also fail."
-			return o.CopiedImages, NewSafeError(msg)
+			return o.CopiedImages, v2alpha1.CollectorSchema{}, NewSafeError(msg)
 		}
 	}
 	endTime := time.Now()
 	execTime := endTime.Sub(startTime)
 	o.Log.Debug("batch time     : %v", execTime)
-	return collectorSchema, nil
+	return collectorSchema, v2alpha1.CollectorSchema{}, nil
 }
 
 // later, we can consider making this func smarter:

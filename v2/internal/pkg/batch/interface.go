@@ -8,5 +8,5 @@ import (
 )
 
 type BatchInterface interface {
-	Worker(ctx context.Context, collectorSchema v2alpha1.CollectorSchema, opts mirror.CopyOptions) (v2alpha1.CollectorSchema, error)
+	Worker(ctx context.Context, collectorSchema v2alpha1.CollectorSchema, opts mirror.CopyOptions) (v2alpha1.CollectorSchema, v2alpha1.CollectorSchema, error)
 }

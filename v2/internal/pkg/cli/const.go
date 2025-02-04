@@ -29,4 +29,11 @@ const (
 	helmIndexesDir                string = "indexes"
 	maxParallelLayerDownloads     uint   = 10
 	limitOverallParallelDownloads uint   = 200
+
+	// Return error codes
+	genericErrorCode         = 1 << 0
+	releaseImageErrorCode    = 1 << 1
+	operatorErrorCode        = 1 << 2
+	helmImageErrorCode       = 1 << 3
+	additionalImageErrorCode = 1 << 4
 )
